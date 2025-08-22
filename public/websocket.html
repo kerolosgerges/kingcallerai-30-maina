@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Kingcaller WebSocket Test</title>
+</head>
+<body>
+  <h2>Kingcaller WebSocket Test</h2>
+  <label>Agent ID: <input id="agentId" value="1268569d-6e22-44ad-b778-cb02557c2081" readonly></label><br>
+  <label>SaaS ID: <input id="saasId" value="3ulyFqSvJgqxts98nxli" readonly></label><br>
+  <label>User Agent: <input id="userAgent" value="test-ui"></label><br>
+  <label>Tenant: <input id="tenant" value="3ulyFqSvJgqxts98nxli" readonly></label><br>
+  <label>Microphone:
+    <select id="micSelect"></select>
+  </label><br>
+  <label>Output Device:
+    <select id="outputSelect"></select>
+  </label><br>
+  <button id="connectBtn">Connect</button>
+  <button id="disconnectBtn" disabled>Disconnect</button>
+  <hr>
+  <textarea id="log" rows="10" cols="80" readonly></textarea>
+  <br>
+  <input id="msg" placeholder="Type message..." style="width:60%">
+  <button id="sendBtn" disabled>Send</button>
+
+  <script>
+    let ws;
+    let audioContext;
+    let outputNode;
+    let selectedMicId = '';
+    let selectedOutputId = '';
+
+    function log(msg) {
+      console.log(msg);
+      document.getElementById('log').value += msg + '\n';
+    }
+
+    async function updateDeviceLists() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const micSelect = document.getElementById('micSelect');
+        const outputSelect = document.getElementById('outputSelect');
+        micSelect.innerHTML = '';
+        outputSelect.innerHTML = '';
+
+        devices.forEach(device => {
+          const option = document.createElement('option');
+          option.value = device.deviceId;
+          option.text = device.label || `${device.kind} ${device.deviceId}`;
+          if (device.kind === 'audioinput') micSelect.appendChild(option);
+          if (device.kind === 'audiooutput') outputSelect.appendChild(option);
+        });
+
+        log(`[Device] Microphones: ${micSelect.length}, Outputs: ${outputSelect.length}`);
+      } catch (err) {
+        log(`[Device Error] ${err.message}`);
+      }
+    }
+
+    updateDeviceLists();
+    navigator.mediaDevices.ondevicechange = updateDeviceLists;
+
+    document.getElementById('micSelect').onchange = e => {
+      selectedMicId = e.target.value;
+      log(`[Device] Selected Mic ID: ${selectedMicId}`);
+    };
+
+    document.getElementById('outputSelect').onchange = e => {
+      selectedOutputId = e.target.value;
+      log(`[Device] Selected Output ID: ${selectedOutputId}`);
+    };
+
+    document.getElementById('connectBtn').onclick = async function () {
+      const agentId = document.getElementById('agentId').value.trim();
+      const saasId = document.getElementById('saasId').value.trim();
+      const userAgent = document.getElementById('userAgent').value.trim();
+      const tenant = document.getElementById('tenant').value.trim();
+
+      if (!agentId || !saasId) {
+        alert('Please enter both Agent ID and SaaS ID');
+        return;
+      }
+
+      const wsUrl = `wss://voiceai.kingcaller.ai/chat/v1/${agentId}?saas_id=${encodeURIComponent(saasId)}&user_agent=${encodeURIComponent(userAgent)}&tenant=${encodeURIComponent(tenant)}`;
+      log(`[WebSocket] Connecting to: ${wsUrl}`);
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        log('[WebSocket] ✅ Connected');
+        document.getElementById('sendBtn').disabled = false;
+        document.getElementById('disconnectBtn').disabled = false;
+        document.getElementById('connectBtn').disabled = true;
+      };
+
+      ws.onclose = () => {
+        log('[WebSocket] 🔌 Disconnected');
+        document.getElementById('sendBtn').disabled = true;
+        document.getElementById('disconnectBtn').disabled = true;
+        document.getElementById('connectBtn').disabled = false;
+      };
+
+      ws.onerror = err => {
+        log('[WebSocket] ❌ Error: ' + err.message);
+        console.error(err);
+      };
+
+      ws.onmessage = async evt => {
+        log('[WebSocket] ⬇️ Received: ' + evt.data);
+        try {
+          const data = JSON.parse(evt.data);
+          if (data.type === 'audio' && data.data) {
+            log(`[Audio] Received audio (${data.data.length} chars)`);
+          }
+          if (data.type === 'clear') {
+            log('[Audio] 🧹 Clear signal received');
+          }
+        } catch (err) {
+          log('[WebSocket] ⚠️ JSON parse error');
+          console.error(err);
+        }
+      };
+
+      try {
+        if (selectedMicId) {
+          log(`[Mic] Requesting access to: ${selectedMicId}`);
+          const micStream = await navigator.mediaDevices.getUserMedia({
+            audio: { deviceId: selectedMicId }
+          });
+          log('[Mic] 🎤 Microphone access granted');
+          micStream.getTracks().forEach(track => track.stop());
+        }
+      } catch (err) {
+        log('[Mic] ❌ Microphone access denied: ' + err.message);
+        console.error(err);
+      }
+    };
+
+    document.getElementById('disconnectBtn').onclick = function () {
+      if (ws) {
+        log('[WebSocket] 🔒 Closing connection');
+        ws.close();
+      }
+    };
+
+    document.getElementById('sendBtn').onclick = function () {
+      const msg = document.getElementById('msg').value;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(msg);
+        log('[WebSocket] ⬆️ Sent: ' + msg);
+      } else {
+        log('[WebSocket] Cannot send: WebSocket not open');
+      }
+    };
+  </script>
+</body>
+</html>

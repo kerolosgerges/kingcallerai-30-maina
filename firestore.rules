@@ -1,0 +1,291 @@
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function getUserId() {
+      return request.auth.uid;
+    }
+    
+    function isAgencyAdmin() {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/userAccess/$(getUserId())) &&
+        get(/databases/$(database)/documents/userAccess/$(getUserId())).data.agencies.size() > 0;
+    }
+    
+    function hasSubAccountAccess(subAccountId) {
+      return isAuthenticated() && (
+        isAgencyAdmin() ||
+        exists(/databases/$(database)/documents/subAccounts/$(subAccountId)/members/$(getUserId()))
+      );
+    }
+    
+    function hasSubAccountRole(subAccountId, roles) {
+      return isAuthenticated() && (
+        isAgencyAdmin() ||
+        (exists(/databases/$(database)/documents/subAccounts/$(subAccountId)/members/$(getUserId())) &&
+         get(/databases/$(database)/documents/subAccounts/$(subAccountId)/members/$(getUserId())).data.role in roles)
+      );
+    }
+
+    function isSubAccountOwnerOrAdmin(subAccountId) {
+      return hasSubAccountRole(subAccountId, ['owner', 'admin']);
+    }
+
+    function canAccessUserData(userId) {
+      return isAuthenticated() && (getUserId() == userId || isAgencyAdmin());
+    }
+
+    // ==================== USER & ACCESS MANAGEMENT ====================
+
+    // Users collection - single source of truth
+    match /users/{userId} {
+      allow read: if canAccessUserData(userId);
+      allow write: if isAuthenticated() && getUserId() == userId;
+      allow create: if isAuthenticated() && getUserId() == userId;
+    }
+
+    // User access cache - for fast permission lookups
+    match /userAccess/{userId} {
+      allow read: if canAccessUserData(userId);
+      allow write: if isAuthenticated() && isAgencyAdmin();
+      allow create: if isAuthenticated();
+    }
+
+    // Agencies collection
+    match /agencies/{agencyId} {
+      allow read: if isAuthenticated() && (
+        exists(/databases/$(database)/documents/agencyMembers/$(agencyId + '_' + getUserId()))
+      );
+      allow write: if isAuthenticated() && (
+        exists(/databases/$(database)/documents/agencyMembers/$(agencyId + '_' + getUserId())) &&
+        get(/databases/$(database)/documents/agencyMembers/$(agencyId + '_' + getUserId())).data.role == 'admin'
+      );
+      allow create: if isAuthenticated();
+    }
+
+    // Agency members - composite key for fast lookups
+    match /agencyMembers/{agencyId_userId} {
+      allow read: if isAuthenticated() && (
+        agencyId_userId.split('_')[1] == getUserId() ||
+        isAgencyAdmin()
+      );
+      allow write: if isAuthenticated() && isAgencyAdmin();
+      allow create: if isAuthenticated();
+    }
+
+    // Global invitations
+    match /invitations/{invitationId} {
+      allow read: if isAuthenticated() && (
+        resource.data.invitedBy == getUserId() ||
+        resource.data.email == request.auth.token.email ||
+        hasSubAccountAccess(resource.data.subAccountId)
+      );
+      allow write: if isAuthenticated() && (
+        resource.data.invitedBy == getUserId() ||
+        hasSubAccountRole(resource.data.subAccountId, ['owner', 'admin'])
+      );
+      allow create: if isAuthenticated();
+    }
+
+    // Global settings (agency admin only)
+    match /globalSettings/{settingId} {
+      allow read: if isAuthenticated();
+      allow write: if isAgencyAdmin();
+    }
+
+    // ==================== SUB-ACCOUNT CONTAINED STRUCTURE ====================
+
+    // Sub-accounts - main workspace containers
+    match /subAccounts/{subAccountId} {
+      allow read: if hasSubAccountAccess(subAccountId);
+      allow write: if isSubAccountOwnerOrAdmin(subAccountId);
+      allow create: if isAuthenticated();
+      
+      // ==================== MEMBER MANAGEMENT ====================
+      
+      // Sub-account members - fully contained
+      match /members/{userId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if isSubAccountOwnerOrAdmin(subAccountId);
+        allow create: if isSubAccountOwnerOrAdmin(subAccountId);
+      }
+
+      // ==================== BUSINESS DATA ====================
+      
+      // Assistants stored under sub-account
+      match /assistants/{assistantId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager', 'user']);
+        allow create: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager', 'user']);
+      }
+
+      // Contacts stored under sub-account - FIXED ACCESS
+      match /contacts/{contactId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager', 'user']);
+        allow create: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager', 'user']);
+        allow delete: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager']);
+      }
+
+      // Campaigns stored under sub-account
+      match /campaigns/{campaignId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager', 'user']);
+        allow create: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager', 'user']);
+      }
+
+      // Workflows stored under sub-account
+      match /workflows/{workflowId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager', 'user']);
+        allow create: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager', 'user']);
+      }
+
+      // Phone numbers stored under sub-account
+      match /phoneNumbers/{phoneId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+        allow create: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+      }
+
+      // Tools stored under sub-account
+      match /tools/{toolId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager']);
+        allow create: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager']);
+      }
+
+      // Knowledge base stored under sub-account
+      match /knowledge/{knowledgeId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager']);
+        allow create: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager']);
+      }
+
+      // Files stored under sub-account
+      match /files/{fileId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager', 'user']);
+        allow create: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager', 'user']);
+        allow delete: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager', 'user']);
+      }
+
+      // A2P registrations stored under sub-account
+      match /a2pRegistrations/{registrationId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+        allow create: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+      }
+
+      // A2P brands stored under sub-account
+      match /a2pBrands/{brandId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+        allow create: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+      }
+
+      // A2P campaigns stored under sub-account
+      match /a2pCampaigns/{campaignId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+        allow create: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+      }
+
+      // Twilio attempts - immutable after creation
+      match /twilioAttempts/{attemptId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow create: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+        allow write: if false; // Immutable after creation
+      }
+
+      // ==================== COMMUNICATION DATA ====================
+
+      // Conversations and chats stored under sub-account
+      match /conversations/{conversationId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager', 'user']);
+        allow create: if hasSubAccountAccess(subAccountId);
+      }
+
+      // Call logs stored under sub-account
+      match /callLogs/{callLogId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager']);
+        allow create: if hasSubAccountAccess(subAccountId);
+      }
+
+      // ==================== INTEGRATIONS & SETTINGS ====================
+
+      // Integrations stored under sub-account
+      match /integrations/{integrationId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+        allow create: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+      }
+
+      // Sub-account specific settings
+      match /settings/{settingType} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+        allow create: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+      }
+
+      // ==================== ANALYTICS & MONITORING ====================
+
+      // Analytics stored under sub-account
+      match /analytics/{analyticsId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin', 'manager']);
+        allow create: if hasSubAccountAccess(subAccountId);
+      }
+
+      // Pre-computed aggregates
+      match /aggregates/{metricType} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+        allow create: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+      }
+
+      // Audit logs stored under sub-account
+      match /auditLogs/{logId} {
+        allow read: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+        allow create: if hasSubAccountAccess(subAccountId);
+        allow write: if false; // Audit logs are immutable
+      }
+
+      // Resource-level permissions
+      match /resourcePermissions/{resourceId} {
+        allow read: if hasSubAccountAccess(subAccountId);
+        allow write: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+        allow create: if hasSubAccountRole(subAccountId, ['owner', 'admin']);
+      }
+    }
+
+    // ==================== LEGACY DATA (for migration) ====================
+
+    // Legacy contacts at root level (read-only during migration)
+    match /contacts/{contactId} {
+      allow read: if isAuthenticated() && resource.data.subAccountId != null && 
+        hasSubAccountAccess(resource.data.subAccountId);
+      allow write: if false; // Force use of contained structure
+    }
+
+    // Legacy phone numbers at root level (read-only during migration)
+    match /phoneNumbers/{phoneId} {
+      allow read: if isAuthenticated() && resource.data.subAccountId != null && 
+        hasSubAccountAccess(resource.data.subAccountId);
+      allow write: if false; // Force use of contained structure
+    }
+
+    // Legacy sub-account members (read-only during migration)
+    match /subAccountMembers/{memberId} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Force use of contained structure
+    }
+  }
+}

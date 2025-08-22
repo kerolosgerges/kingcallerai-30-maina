@@ -1,0 +1,138 @@
+
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function getUserId() {
+      return request.auth.uid;
+    }
+    
+    function hasSubAccountAccess(subAccountId) {
+      return isAuthenticated() && (
+        // Check if user is agency admin (has access to userAccess doc with agencies)
+        exists(/databases/(default)/documents/userAccess/$(getUserId())) &&
+        get(/databases/(default)/documents/userAccess/$(getUserId())).data.agencies.size() > 0
+      ) || (
+        // Check if user is member of sub-account
+        exists(/databases/(default)/documents/subAccounts/$(subAccountId)/members/$(getUserId()))
+      );
+    }
+
+    // ==================== USER FILES ====================
+    
+    // Users can upload and access their own files
+    match /users/{userId}/{allPaths=**} {
+      allow read, write: if isAuthenticated() && getUserId() == userId;
+    }
+    
+    // ==================== SUB-ACCOUNT CONTAINED FILES ====================
+    
+    // Sub-account specific files (fully contained)
+    match /subAccounts/{subAccountId}/{allPaths=**} {
+      allow read, write: if hasSubAccountAccess(subAccountId);
+    }
+    
+    // Assistant files (contained within sub-account)
+    match /subAccounts/{subAccountId}/assistants/{assistantId}/{allPaths=**} {
+      allow read, write: if hasSubAccountAccess(subAccountId);
+    }
+    
+    // Campaign assets (contained within sub-account)
+    match /subAccounts/{subAccountId}/campaigns/{campaignId}/{allPaths=**} {
+      allow read, write: if hasSubAccountAccess(subAccountId);
+    }
+    
+    // Workflow assets (contained within sub-account)
+    match /subAccounts/{subAccountId}/workflows/{workflowId}/{allPaths=**} {
+      allow read, write: if hasSubAccountAccess(subAccountId);
+    }
+    
+    // Knowledge base files (contained within sub-account)
+    match /subAccounts/{subAccountId}/knowledge/{knowledgeId}/{allPaths=**} {
+      allow read, write: if hasSubAccountAccess(subAccountId);
+    }
+    
+    // Contact files and attachments (contained within sub-account)
+    match /subAccounts/{subAccountId}/contacts/{contactId}/{allPaths=**} {
+      allow read, write: if hasSubAccountAccess(subAccountId);
+    }
+    
+    // Conversation recordings (contained within sub-account)
+    match /subAccounts/{subAccountId}/conversations/{conversationId}/{allPaths=**} {
+      allow read, write: if hasSubAccountAccess(subAccountId);
+    }
+    
+    // Call recordings (contained within sub-account)
+    match /subAccounts/{subAccountId}/callLogs/{callLogId}/{allPaths=**} {
+      allow read, write: if hasSubAccountAccess(subAccountId);
+    }
+    
+    // Tool files (contained within sub-account)
+    match /subAccounts/{subAccountId}/tools/{toolId}/{allPaths=**} {
+      allow read, write: if hasSubAccountAccess(subAccountId);
+    }
+    
+    // Integration files (contained within sub-account)
+    match /subAccounts/{subAccountId}/integrations/{integrationId}/{allPaths=**} {
+      allow read, write: if hasSubAccountAccess(subAccountId);
+    }
+    
+    // ==================== AGENCY FILES ====================
+    
+    // Agency-wide assets (logos, templates, etc.)
+    match /agencies/{agencyId}/{allPaths=**} {
+      allow read: if isAuthenticated() && (
+        exists(/databases/(default)/documents/userAccess/$(getUserId())) &&
+        get(/databases/(default)/documents/userAccess/$(getUserId())).data.agencies[agencyId] != null
+      );
+      allow write: if isAuthenticated() && (
+        exists(/databases/(default)/documents/userAccess/$(getUserId())) &&
+        get(/databases/(default)/documents/userAccess/$(getUserId())).data.agencies.size() > 0
+      );
+    }
+    
+    // ==================== PUBLIC & SHARED FILES ====================
+    
+    // Public assets (platform logos, templates, etc.)
+    match /public/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAuthenticated() && (
+        exists(/databases/(default)/documents/userAccess/$(getUserId())) &&
+        get(/databases/(default)/documents/userAccess/$(getUserId())).data.agencies.size() > 0
+      );
+    }
+    
+    // Shared templates and resources
+    match /shared/{allPaths=**} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && (
+        exists(/databases/(default)/documents/userAccess/$(getUserId())) &&
+        get(/databases/(default)/documents/userAccess/$(getUserId())).data.agencies.size() > 0
+      );
+    }
+    
+    // ==================== LEGACY PATHS (for migration) ====================
+    
+    // Legacy agent/assistant files (read-only during migration)
+    match /agents/{userId}/{agentId}/{allPaths=**} {
+      allow read: if isAuthenticated() && getUserId() == userId;
+      allow write: if false; // Force use of contained structure
+    }
+    
+    // Legacy recording files (read-only during migration)
+    match /recordings/{userId}/{allPaths=**} {
+      allow read: if isAuthenticated() && getUserId() == userId;
+      allow write: if false; // Force use of contained structure
+    }
+    
+    // Legacy team files (read-only during migration)
+    match /teams/{teamId}/{allPaths=**} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Force use of contained structure
+    }
+  }
+}
