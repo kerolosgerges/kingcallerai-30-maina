@@ -143,6 +143,38 @@ class StripeService {
     const url = period ? `/usage/${saasId}?period=${period}` : `/usage/${saasId}`;
     return this.makeRequest<any>(url);
   }
+
+  // Pricing operations
+  async getProducts(): Promise<any[]> {
+    return this.makeRequest<any[]>('/products');
+  }
+
+  async getPrices(): Promise<any[]> {
+    return this.makeRequest<any[]>('/prices');
+  }
+
+  async getPlans(): Promise<any[]> {
+    // This would fetch and combine products and prices to create plan objects
+    // In a real implementation, this might be a dedicated endpoint
+    try {
+      const [products, prices] = await Promise.all([
+        this.getProducts(),
+        this.getPrices()
+      ]);
+      
+      // Combine products and prices to create plan objects
+      return products.map(product => {
+        const productPrices = prices.filter(price => price.product === product.id);
+        return {
+          ...product,
+          prices: productPrices
+        };
+      });
+    } catch (error) {
+      console.error('Failed to fetch plans:', error);
+      return [];
+    }
+  }
 }
 
 export const stripeService = new StripeService();
